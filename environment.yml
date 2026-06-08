@@ -1,0 +1,35 @@
+name: sportlis-unet
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+
+  # Core scientific
+  - numpy
+  - scipy
+  - pandas
+  - xarray
+  - netCDF4
+  - zarr
+
+  # PyTorch (GPU se disponibile, altrimenti CPU)
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.1   # rimuovere su Mac (CPU only)
+
+  # Geo/raster
+  - rasterio
+  - pyproj
+
+  # Jupyter
+  - jupyterlab
+  - ipykernel
+  - ipywidgets
+  - tqdm
+
+  - pip:
+    - pynco          # opzionale, per manipolazione nc4

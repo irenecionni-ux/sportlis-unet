@@ -1,0 +1,39 @@
+# Dati grezzi e intermedi (troppo grandi per git)
+*.nc4
+*.nc
+*.h5
+*.hdf5
+
+# Zarr stores
+*.zarr/
+zarr_*/
+prepared_pp_narr_sportlis/
+
+# Memmap arrays
+memmap_*/
+*.npy
+
+# Output modelli e checkpoint
+output_*/
+*.pt
+*.pth
+best_*.pt
+resume_*.pt
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# macOS
+.DS_Store
+
+# Log e tmp
+*.log
+*.tmp
