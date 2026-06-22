@@ -18,6 +18,7 @@ import pandas as pd
 import torch
 from scipy.ndimage import uniform_filter
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 import xarray as xr
@@ -92,49 +93,46 @@ if device.type == 'cuda':
 
 # ── UNet (identica al notebook) ───────────────────────────────────────────────
 class DoubleConv(nn.Module):
-    def __init__(self, in_ch, out_ch, groups=8, dropout=0.0):
+    def __init__(self, in_ch, out_ch, dropout=0.0):
         super().__init__()
-        g = min(groups, out_ch)
+        g = min(8, out_ch)
         while out_ch % g != 0: g -= 1
-        self.net = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=False),
-            nn.GroupNorm(g, out_ch), nn.GELU(),
-            nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
-            nn.GroupNorm(g, out_ch), nn.GELU(),
-        )
+        layers = [nn.Conv2d(in_ch,out_ch,3,padding=1), nn.GroupNorm(g,out_ch), nn.GELU(),
+                  nn.Conv2d(out_ch,out_ch,3,padding=1), nn.GroupNorm(g,out_ch), nn.GELU()]
+        if dropout > 0: layers.append(nn.Dropout2d(dropout))
+        self.net = nn.Sequential(*layers)
     def forward(self, x): return self.net(x)
 
+def pad_to_mult(x, m=8):
+    h,w = x.shape[-2],x.shape[-1]
+    H = ((h+m-1)//m)*m; W = ((w+m-1)//m)*m
+    ph = H-h; pw = W-w
+    pl = pw//2; pr = pw-pl; pt = ph//2; pb = ph-pt
+    return F.pad(x,(pl,pr,pt,pb),mode='reflect'),(pl,pr,pt,pb)
+
+def unpad(x, p):
+    pl,pr,pt,pb = p; H,W = x.shape[-2],x.shape[-1]
+    return x[..., pt:H-pb if pb>0 else H, pl:W-pr if pr>0 else W]
+
 class UNet(nn.Module):
-    def __init__(self, in_ch, base=32, dropout=0.1):
+    def __init__(self, in_channels, out_channels=1, base=32, dropout=0.1):
         super().__init__()
-        b = base
-        self.enc1 = DoubleConv(in_ch, b,   dropout=dropout)
-        self.enc2 = DoubleConv(b,    b*2,  dropout=dropout)
-        self.enc3 = DoubleConv(b*2,  b*4,  dropout=dropout)
-        self.enc4 = DoubleConv(b*4,  b*8,  dropout=dropout)
-        self.bot  = DoubleConv(b*8,  b*16, dropout=dropout)
-        self.up4  = nn.ConvTranspose2d(b*16, b*8,  2, stride=2)
-        self.dec4 = DoubleConv(b*16, b*8,  dropout=dropout)
-        self.up3  = nn.ConvTranspose2d(b*8,  b*4,  2, stride=2)
-        self.dec3 = DoubleConv(b*8,  b*4,  dropout=dropout)
-        self.up2  = nn.ConvTranspose2d(b*4,  b*2,  2, stride=2)
-        self.dec2 = DoubleConv(b*4,  b*2,  dropout=dropout)
-        self.up1  = nn.ConvTranspose2d(b*2,  b,    2, stride=2)
-        self.dec1 = DoubleConv(b*2,  b,    dropout=dropout)
-        self.head = nn.Conv2d(b, 1, 1)
-        self.pool = nn.MaxPool2d(2)
-    def forward(self, x):
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
-        e4 = self.enc4(self.pool(e3))
-        b  = self.bot(self.pool(e4))
-        d  = self.dec4(torch.cat([self.up4(b),  e4], 1))
-        d  = self.dec3(torch.cat([self.up3(d),  e3], 1))
-        d  = self.dec2(torch.cat([self.up2(d),  e2], 1))
-        d  = self.dec1(torch.cat([self.up1(d),  e1], 1))
-        return torch.relu(self.head(d))
+        self.e1=DoubleConv(in_channels,base); self.p1=nn.MaxPool2d(2)
+        self.e2=DoubleConv(base,base*2);      self.p2=nn.MaxPool2d(2)
+        self.e3=DoubleConv(base*2,base*4);    self.p3=nn.MaxPool2d(2)
+        self.bn=DoubleConv(base*4,base*8,dropout=dropout)
+        self.u1=nn.ConvTranspose2d(base*8,base*4,2,stride=2); self.d1=DoubleConv(base*8,base*4)
+        self.u2=nn.ConvTranspose2d(base*4,base*2,2,stride=2); self.d2=DoubleConv(base*4,base*2)
+        self.u3=nn.ConvTranspose2d(base*2,base,2,stride=2);   self.d3=DoubleConv(base*2,base)
+        self.out=nn.Conv2d(base,out_channels,1)
+    def forward(self,x):
+        xp,pads = pad_to_mult(x)
+        e1=self.e1(xp); e2=self.e2(self.p1(e1)); e3=self.e3(self.p2(e2))
+        b=self.bn(self.p3(e3))
+        d=self.d1(torch.cat([self.u1(b),e3],1))
+        d=self.d2(torch.cat([self.u2(d),e2],1))
+        d=self.d3(torch.cat([self.u3(d),e1],1))
+        return F.softplus(unpad(self.out(d),pads))
 
 # ── Loss ──────────────────────────────────────────────────────────────────────
 def masked_hybrid_loss(pred, target, mask, alpha=2.0):
@@ -278,7 +276,7 @@ def eval_fold(test_year, ckpt_path, mean_arr, std_arr, lat_n, lon_n, topo):
     mm  = np.lib.format.open_memmap(str(mm_path),  mode='r')
     msk = np.lib.format.open_memmap(str(msk_path), mode='r')
     T   = mm.shape[0]
-    model = UNet(N_IN_CHANNELS, dropout=DROPOUT_P).to(device)
+    model = UNet(N_IN_CHANNELS, dropout=DROPOUT_P, base=32).to(device)
     model.load_state_dict(torch.load(str(ckpt_path), map_location=device))
     model.eval()
     sa = sb = sq = sn = 0.0
@@ -360,7 +358,7 @@ for fi in fold_indices:
                            num_workers=NUM_WORKERS, pin_memory=True)
 
         # ── Modello ──────────────────────────────────────────────────────────
-        model  = UNet(N_IN_CHANNELS, dropout=DROPOUT_P).to(device)
+        model  = UNet(N_IN_CHANNELS, dropout=DROPOUT_P, base=32).to(device)
         opt    = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
         sched  = optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=3)
         scaler = torch.cuda.amp.GradScaler(enabled=USE_AMP and device.type == 'cuda')
