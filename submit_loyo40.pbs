@@ -10,7 +10,7 @@
 
 # ── Ambiente ──────────────────────────────────────────────────────────────────
 source ~/.bashrc
-conda activate unet_env
+conda activate sportlis-unet
 
 FOLD_IDX=${PBS_ARRAY_INDEX}   # 0-39: corrisponde all'anno test 1985+IDX
 
@@ -22,7 +22,7 @@ echo "======================================================"
 
 cd /glade/u/home/cionni/unet_sportlis/sportlis-unet/
 
-python train_loyo40.py --fold_idx ${FOLD_IDX}
+/glade/u/home/cionni/.conda/envs/sportlis-unet/bin/python train_loyo40.py --fold_idx ${FOLD_IDX}
 
 echo "======================================================"
 echo " Fine fold ${FOLD_IDX}  $(date)"
