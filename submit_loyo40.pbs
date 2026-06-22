@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N unet_loyo40
+#PBS -A UBOI0008
+#PBS -q casper
+#PBS -J 0-39
+#PBS -l select=1:ncpus=4:mem=64GB:ngpus=1:gpu_type=v100
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o /glade/u/home/cionni/unet_sportlis/logs/loyo40_job^array_index^.log
+
+# ── Ambiente ──────────────────────────────────────────────────────────────────
+source ~/.bashrc
+conda activate unet_env
+
+FOLD_IDX=${PBS_ARRAY_INDEX}   # 0-39: corrisponde all'anno test 1985+IDX
+
+echo "======================================================"
+echo " JOB ARRAY: fold index ${FOLD_IDX}  (anno test: $((1985 + FOLD_IDX)))"
+echo " Host: $(hostname)  GPUs: $(nvidia-smi -L 2>/dev/null | head -2)"
+echo " Start: $(date)"
+echo "======================================================"
+
+cd /glade/u/home/cionni/unet_sportlis/sportlis-unet/
+
+python train_loyo40.py --fold_idx ${FOLD_IDX}
+
+echo "======================================================"
+echo " Fine fold ${FOLD_IDX}  $(date)"
+echo "======================================================"
