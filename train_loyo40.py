@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from scipy.ndimage import uniform_filter
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
@@ -216,19 +217,35 @@ def load_static():
     lat2d, lon2d = np.meshgrid(lat_1d, lon_1d, indexing='ij')
     lat_n = ((lat2d - lat2d.mean()) / (lat2d.std() or 1.0)).astype(np.float32)
     lon_n = ((lon2d - lon2d.mean()) / (lon2d.std() or 1.0)).astype(np.float32)
-    elev   = ds['elevation'].values.astype(np.float32)
-    slope  = ds['slope'].values.astype(np.float32)
-    asp_s  = ds['aspect_sin'].values.astype(np.float32)
-    asp_c  = ds['aspect_cos'].values.astype(np.float32)
-    tpi_s  = ds['tpi_short'].values.astype(np.float32)
-    tpi_l  = ds['tpi_long'].values.astype(np.float32)
+    elev_raw = ds['elevation'].values.astype(np.float32)
+    slope    = ds['slope'].values.astype(np.float32)
+    asp_s    = ds['aspect_sin'].values.astype(np.float32)
+    asp_c    = ds['aspect_cos'].values.astype(np.float32)
     ds.close()
     ds_c = xr.open_dataset(CANOPY_FILE)
     canopy = ds_c['canopy_fraction'].values.astype(np.float32)
     ds_c.close()
-    for arr in [elev, slope, asp_s, asp_c, tpi_s, tpi_l, canopy]:
-        mu, sd = arr.mean(), arr.std()
-        arr[:] = (arr - mu) / (sd if sd > 0 else 1.0)
+
+    # TPI calcolato al volo da elevation (come nel notebook)
+    elev_filled = np.where(np.isfinite(elev_raw), elev_raw, np.nanmedian(elev_raw))
+    tpi_s = (elev_filled - uniform_filter(elev_filled, size=2*5+1,  mode='nearest')).astype(np.float32)
+    tpi_l = (elev_filled - uniform_filter(elev_filled, size=2*10+1, mode='nearest')).astype(np.float32)
+
+    # Normalizzazione
+    def norm(arr):
+        m, s = float(np.nanmean(arr)), float(np.nanstd(arr))
+        return ((arr - m) / (s if s > 0 else 1.0)).astype(np.float32)
+
+    elev  = norm(elev_raw)
+    slope = norm(slope)
+    tpi_s = norm(tpi_s)
+    tpi_l = norm(tpi_l)
+    # aspect_sin/cos: già in [-1,1], nessuna normalizzazione
+    asp_s = np.where(np.isfinite(asp_s), asp_s, 0.0).astype(np.float32)
+    asp_c = np.where(np.isfinite(asp_c), asp_c, 0.0).astype(np.float32)
+    # canopy: centra solo per media
+    canopy = (canopy - float(np.nanmean(canopy))).astype(np.float32)
+
     topo = np.stack([elev, slope, asp_s, asp_c, tpi_s, tpi_l, canopy], axis=0)
     return lat_n, lon_n, topo
 
